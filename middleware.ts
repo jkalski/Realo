@@ -2,6 +2,11 @@ import { type NextRequest } from 'next/server'
 import { updateSession } from '@/lib/supabase/middleware'
 
 export async function middleware(request: NextRequest) {
+  // Skip auth for webhook endpoints
+  if (request.nextUrl.pathname.startsWith('/api/webhooks')) {
+    return
+  }
+
   return await updateSession(request)
 }
 

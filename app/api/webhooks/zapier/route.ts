@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
+import { enqueueWorkflow } from '@/worker/queue'
 
-// Use service role to bypass RLS for webhook inserts
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -9,7 +9,6 @@ const supabase = createClient(
 
 export async function POST(request: Request) {
   try {
-    // Verify the shared secret token
     const authHeader = request.headers.get('x-realo-secret')
     if (authHeader !== process.env.WEBHOOK_SECRET) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -17,7 +16,6 @@ export async function POST(request: Request) {
 
     const body = await request.json()
 
-    // Extract lead data from Zapier payload
     const {
       account_id,
       first_name,
@@ -35,7 +33,6 @@ export async function POST(request: Request) {
       )
     }
 
-    // Check if contact already exists
     const { data: existing } = await supabase
       .from('contacts')
       .select('id')
@@ -46,7 +43,6 @@ export async function POST(request: Request) {
     let contact
 
     if (existing) {
-      // Update existing contact
       const { data, error } = await supabase
         .from('contacts')
         .update({
@@ -65,7 +61,6 @@ export async function POST(request: Request) {
       if (error) throw error
       contact = data
     } else {
-      // Create new contact
       const { data, error } = await supabase
         .from('contacts')
         .insert({
@@ -85,7 +80,6 @@ export async function POST(request: Request) {
       contact = data
     }
 
-    // Log the event
     await supabase.from('events').insert({
       account_id,
       contact_id: contact.id,
@@ -93,15 +87,28 @@ export async function POST(request: Request) {
       payload: { source, original_payload: body }
     })
 
-    // Create workflow instance for new leads
     if (!existing) {
-      await supabase.from('workflow_instances').insert({
+      const { data: workflowInstance, error: wfError } = await supabase
+        .from('workflow_instances')
+        .insert({
+          account_id,
+          contact_id: contact.id,
+          workflow_type: 'new_lead_followup',
+          status: 'active',
+          current_step: 0,
+          next_step_at: new Date().toISOString()
+        })
+        .select()
+        .single()
+
+      if (wfError) throw wfError
+
+      await enqueueWorkflow({
+        type: 'new_lead_followup',
         account_id,
         contact_id: contact.id,
-        workflow_type: 'new_lead_followup',
-        status: 'active',
-        current_step: 0,
-        next_step_at: new Date().toISOString()
+        workflow_instance_id: workflowInstance.id,
+        step: 0
       })
     }
 

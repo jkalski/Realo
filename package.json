@@ -14,10 +14,14 @@
     "@stripe/stripe-js": "^8.9.0",
     "@supabase/ssr": "^0.9.0",
     "@supabase/supabase-js": "^2.99.1",
+    "@upstash/qstash": "^2.10.1",
+    "@upstash/ratelimit": "^2.0.8",
+    "@upstash/redis": "^1.37.0",
     "bullmq": "^5.71.0",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
-    "ioredis": "^5.10.0",
+    "dotenv": "^17.3.1",
+    "ioredis": "^5.10.1",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -37,6 +41,8 @@
     "eslint-config-next": "16.1.6",
     "supabase": "^2.78.1",
     "tailwindcss": "^4",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }

@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { enqueueWorkflow, enqueueAlert } from './queue'
 import twilio from 'twilio'
 import { generateSMS } from '@/lib/ai'
+import { sendHotLeadAlert } from '@/lib/alerts'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -316,18 +317,39 @@ export async function checkHotLead(account_id: string, contact_id: string) {
   }
 
   if (score >= 8) {
-    // Update contact to hot
     await supabase
       .from('contacts')
       .update({ status: 'hot', lead_score: score })
       .eq('id', contact_id)
 
-    // Fire alert
-    await enqueueAlert({
-      type: 'hot_lead_alert',
-      account_id,
-      contact_id
-    })
+    // Get agent phone from account
+    const { data: account } = await supabase
+      .from('accounts')
+      .select('owner_email')
+      .eq('id', account_id)
+      .single()
+
+    // Get recent events for summary
+    const { data: events } = await supabase
+      .from('events')
+      .select('event_type, created_at')
+      .eq('contact_id', contact_id)
+      .order('created_at', { ascending: false })
+      .limit(10)
+
+    const { data: contact } = await supabase
+      .from('contacts')
+      .select('*')
+      .eq('id', contact_id)
+      .single()
+
+    if (contact && account) {
+      await sendHotLeadAlert(
+        process.env.AGENT_ALERT_PHONE!,
+        contact,
+        events || []
+      )
+    }
 
     await supabase.from('events').insert({
       account_id,

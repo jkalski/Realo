@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { enqueueWorkflow, enqueueAlert } from './queue'
 import twilio from 'twilio'
+import { generateSMS } from '@/lib/ai'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -150,18 +151,20 @@ export async function handleNewLeadFollowup(
     return
   }
 
-  // Check working hours
-  const { allowed, msUntilOpen } = await isWithinWorkingHours(account_id)
-  if (!allowed) {
-    console.log(`Outside working hours, delaying ${msUntilOpen}ms`)
-    await enqueueWorkflow({
-      type: 'new_lead_followup',
-      account_id,
-      contact_id,
-      workflow_instance_id,
-      step
-    }, msUntilOpen)
-    return
+  // Check working hours (skip in dev mode)
+  if (process.env.NODE_ENV !== 'development') {
+    const { allowed, msUntilOpen } = await isWithinWorkingHours(account_id)
+    if (!allowed) {
+      console.log(`Outside working hours, delaying ${msUntilOpen}ms`)
+      await enqueueWorkflow({
+        type: 'new_lead_followup',
+        account_id,
+        contact_id,
+        workflow_instance_id,
+        step
+      }, msUntilOpen)
+      return
+    }
   }
 
   // Get contact info
@@ -173,12 +176,36 @@ export async function handleNewLeadFollowup(
 
   if (!contact) return
 
-  // Message templates per step
-  const messages = [
-    `Hi ${contact.first_name}! I saw you were interested in finding a property. I'd love to help — when's a good time to chat?`,
-    `Hey ${contact.first_name}, just following up! I have some great listings that might be perfect for you. Interested in taking a look?`,
-    `Hi ${contact.first_name}, last follow up from me — if you're still looking for a property I'm here to help anytime. No pressure!`
-  ]
+  // Get previous messages for context
+  const { data: previousMessages } = await supabase
+    .from('messages')
+    .select('body')
+    .eq('contact_id', contact_id)
+    .eq('direction', 'outbound')
+    .order('created_at', { ascending: true })
+
+  const previousBodies = previousMessages?.map(m => m.body) || []
+
+  // Generate AI message
+  const messageText = await generateSMS(
+    {
+      first_name: contact.first_name,
+      last_name: contact.last_name,
+      phone: contact.phone,
+      email: contact.email,
+      source: contact.source,
+      notes: contact.notes,
+      lead_score: contact.lead_score,
+      status: contact.status
+    },
+    {
+      step,
+      workflow_type: 'new_lead_followup',
+      previous_messages: previousBodies
+    }
+  )
+
+  const messages = [messageText, messageText, messageText]
 
   if (step >= messages.length) {
     await supabase

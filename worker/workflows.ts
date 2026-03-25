@@ -1,9 +1,15 @@
 import { createClient } from '@supabase/supabase-js'
 import { enqueueWorkflow, enqueueAlert } from './queue'
+import twilio from 'twilio'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
+
+const twilioClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID!,
+  process.env.TWILIO_AUTH_TOKEN!
 )
 
 const HOURS_24 = 24 * 60 * 60 * 1000
@@ -99,6 +105,20 @@ async function logMessage(
   return data
 }
 
+async function sendSMS(to: string, body: string, messageSid?: string) {
+  try {
+    const message = await twilioClient.messages.create({
+      body,
+      from: process.env.TWILIO_PHONE_NUMBER!,
+      to
+    })
+    return message.sid
+  } catch (error: any) {
+    console.error('SMS send error:', error.message)
+    throw error
+  }
+}
+
 // Main new lead followup workflow
 export async function handleNewLeadFollowup(
   account_id: string,
@@ -169,9 +189,8 @@ export async function handleNewLeadFollowup(
   }
 
   const dedup_key = `new_lead_${workflow_instance_id}_step_${step}`
-  
-  // Log the message (actual SMS sending comes when Twilio is connected)
-  await logMessage(
+
+  const message = await logMessage(
     account_id,
     contact_id,
     workflow_instance_id,
@@ -179,6 +198,35 @@ export async function handleNewLeadFollowup(
     messages[step],
     dedup_key
   )
+
+  if (message && contact.phone) {
+    try {
+      const sid = await sendSMS(contact.phone, messages[step])
+      await supabase
+        .from('messages')
+        .update({
+          status: 'sent',
+          twilio_sid: sid,
+          delivered_at: new Date().toISOString()
+        })
+        .eq('id', message.id)
+
+      await supabase
+        .from('usage_counters')
+        .upsert({
+          account_id,
+          month: new Date().toISOString().slice(0, 7),
+          sms_sent: 1
+        }, { onConflict: 'account_id,month' })
+
+      console.log(`SMS sent to ${contact.phone}, SID: ${sid}`)
+    } catch (smsError: any) {
+      await supabase
+        .from('messages')
+        .update({ status: 'failed', failed_reason: smsError.message })
+        .eq('id', message.id)
+    }
+  }
 
   // Log event
   await supabase.from('events').insert({
